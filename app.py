@@ -1,26 +1,72 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import pdfplumber
+from docx import Document
+import io
 
-# Setup the page appearance
-st.set_page_config(page_title="Data Analyzer", layout="wide")
+st.set_page_config(page_title="Multi-Format Data Analyzer", layout="wide")
 
-# Title and Instructions
-st.title("📂 Interactive Student Database")
-st.markdown("Upload your file (CSV or Excel) to analyze marks and sort data.")
+# --- HELPER FUNCTIONS ---
 
-# --- 1. FILE UPLOAD ---
-uploaded_file = st.file_uploader("Upload your document here", type=['csv', 'xlsx'])
+def read_pdf(file):
+    """Extracts tables from PDF and returns a DataFrame"""
+    with pdfplumber.open(file) as pdf:
+        all_data = []
+        for page in pdf.pages:
+            table = page.extract_table()
+            if table:
+                all_data.extend(table)
+    if not all_data:
+        return None
+    # Use the first row as header
+    return pd.DataFrame(all_data[1:], columns=all_data[0])
 
-if uploaded_file is not None:
-    # Load the data automatically
-    try:
-        if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
-        else:
-            df = pd.read_excel(uploaded_file)
+def read_docx(file):
+    """Extracts tables from Word Document and returns a DataFrame"""
+    doc = Document(file)
+    all_data = []
+    for table in doc.tables:
+        for row in table.rows:
+            all_data.append([cell.text.strip() for cell in row.cells])
+    if not all_data:
+        return None
+    return pd.DataFrame(all_data[1:], columns=all_data[0])
+
+# --- APP UI ---
+st.title("📂 Universal Student Database")
+st.write("Now supporting: **CSV, Excel, PDF, and Word**")
+
+# Update the file uploader to accept new types
+uploaded_file = st.file_uploader("Upload document", type=['csv', 'xlsx', 'pdf', 'docx'])
+
+if uploaded_file:
+    df = None
+    file_type = uploaded_file.name.split('.')[-1]
+
+    # Process based on file type
+    if file_type == 'csv':
+        df = pd.read_csv(uploaded_file)
+    elif file_type == 'xlsx':
+        df = pd.read_excel(uploaded_file)
+    elif file_type == 'pdf':
+        df = read_pdf(uploaded_file)
+    elif file_type == 'docx':
+        df = read_docx(uploaded_file)
+
+    if df is not None:
+        # Standardize: Ensure numeric columns are actually numbers
+        for col in df.columns:
+            if 'mark' in col.lower() or 'score' in col.lower():
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        st.success(f"Loaded {uploaded_file.name} successfully!")
         
-        st.success("File uploaded successfully!")
+        # --- (Continue with the Sorting and Charting code from before) ---
+        # Note: The rest of the sorting/charting code remains the same!
+        st.dataframe(df)
+    else:
+        st.error("Could not find a valid table inside this file.")
 
         # --- 2. DATA CLEANING (Standardizing Column Names) ---
         # This makes the app "smart" by finding columns even if they are lowercase
