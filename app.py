@@ -61,7 +61,19 @@ if uploaded_file is not None:
 
         # --- 2. DATA CLEANING (Standardizing Column Names) ---
         # This makes the app "smart" by finding columns even if they are lowercase
-        df.columns = [c.strip() for c in df.columns] 
+        # --- ONLY RUN THIS IF DF WAS SUCCESSFULLY CREATED ---
+        if df is not None:
+            # This line removes hidden spaces from headers
+            df.columns = [str(c).strip() for c in df.columns] 
+            
+            st.success(f"Loaded {uploaded_file.name} successfully!")
+            
+            # Now show the data
+            st.dataframe(df, use_container_width=True)
+            
+            # ... rest of your analysis code ...
+        else:
+            st.error("The file was uploaded, but no data table could be extracted.") 
         
         # --- 3. SIDEBAR CONTROLS ---
         st.sidebar.header("Filter & Sort")
