@@ -1,87 +1,80 @@
 import streamlit as st
 import pandas as pd
-import pdfplumber
-from docx import Document
 import io
 
-st.set_page_config(page_title="Ultimate Data Analyzer", layout="wide")
+st.set_page_config(page_title="CSV Data Aligner", layout="wide")
 
-# --- 1. DATA EXTRACTION FUNCTIONS ---
-def process_file(file):
-    ext = file.name.split('.')[-1].lower()
-    if ext == 'csv': return pd.read_csv(file)
-    if ext == 'xlsx': return pd.read_excel(file)
-    if ext == 'pdf':
-        with pdfplumber.open(file) as pdf:
-            data = []
-            for page in pdf.pages:
-                table = page.extract_table()
-                if table: data.extend(table)
-            return pd.DataFrame(data[1:], columns=data[0]) if data else None
-    if ext == 'docx':
-        doc = Document(file)
-        data = [[c.text.strip() for c in r.cells] for t in doc.tables for r in t.rows]
-        return pd.DataFrame(data[1:], columns=data[0]) if data else None
-    return None
+st.title("🛠️ CSV Database & Aligner")
+st.write("If your CSV looks messy, use the **Delimiter** and **Header** settings below to fix the arrangement.")
 
-# --- 2. THE APP INTERFACE ---
-st.title("📊 Universal Student Data Analyzer")
+# --- 1. UPLOAD WITH ADVANCED SETTINGS ---
+with st.expander("Settings: Fix CSV Alignment", expanded=True):
+    col1, col2, col3 = st.columns(3)
+    sep = col1.selectbox("Separator (Delimiter):", [",", ";", "Tab", "Space", "|"], help="What separates your words?")
+    encoding = col2.selectbox("File Encoding:", ["utf-8", "latin1", "cp1252"])
+    skip_rows = col3.number_input("Skip first X rows:", min_value=0, value=0)
 
-# Create Tabs for Uploading vs. Pasting
-tab1, tab2 = st.tabs(["📂 Upload File", "📋 Paste Data / CV Text"])
+uploaded_file = st.file_uploader("Upload your CSV file", type=['csv', 'txt'])
 
-df = None
+if uploaded_file:
+    try:
+        # Read the CSV with the user-defined settings
+        df = pd.read_csv(
+            uploaded_file, 
+            sep=sep, 
+            encoding=encoding, 
+            skiprows=skip_rows,
+            on_bad_lines='warn', # Don't crash on messy lines
+            engine='python'
+        )
 
-with tab1:
-    uploaded_file = st.file_uploader("Upload CSV, Excel, PDF, or Word", type=['csv', 'xlsx', 'pdf', 'docx'])
-    if uploaded_file:
-        df = process_file(uploaded_file)
+        if not df.empty:
+            # Clean column names
+            df.columns = [str(c).strip() for c in df.columns]
 
-with tab2:
-    st.write("Paste your CV data or list here. Ensure there is a space, comma, or tab between items.")
-    raw_input = st.text_area("Paste data here:", height=200, placeholder="John Doe 85 Male\nJane Smith 90 Female")
-    separator = st.selectbox("How is your data separated?", ["Auto-detect Space", "Comma (,)", "Tab"])
-    
-    if raw_input:
-        lines = [line.strip() for line in raw_input.split('\n') if line.strip()]
-        if separator == "Comma (,)":
-            data = [l.split(',') for l in lines]
-        elif separator == "Tab":
-            data = [l.split('\t') for l in lines]
-        else:
-            data = [l.split() for l in lines]
-        df = pd.DataFrame(data)
+            # --- 2. INTERACTIVE DATA CLEANING ---
+            st.sidebar.header("Filter & Sort")
+            
+            # Search Bar
+            search_query = st.sidebar.text_input("🔍 Search Name/Surname:")
+            if search_query:
+                mask = df.apply(lambda row: row.astype(str).str.contains(search_query, case=False).any(), axis=1)
+                df = df[mask]
 
-# --- 3. ANALYSIS & SORTING ---
-if df is not None:
-    st.divider()
-    # Clean-up: Remove empty rows
-    df = df.dropna(how='all').fillna("")
-    
-    # Let user pick column names if they are missing
-    if st.checkbox("Use first row as header?"):
-        new_header = df.iloc[0]
-        df = df[1:]
-        df.columns = new_header
+            # Column Selection (In case CSV has too many random columns)
+            to_keep = st.sidebar.multiselect("Keep these columns:", df.columns, default=list(df.columns))
+            if to_keep:
+                df = df[to_keep]
 
-    # Sidebar Tools
-    st.sidebar.header("Data Tools")
-    target_col = st.sidebar.selectbox("Sort by:", df.columns)
-    order = st.sidebar.radio("Direction:", ["Ascending", "Descending"])
-    df = df.sort_values(by=target_col, ascending=(order == "Ascending"))
+            # Sorting
+            sort_target = st.sidebar.selectbox("Sort data by:", df.columns)
+            order = st.sidebar.radio("Order:", ["Ascending", "Descending"])
+            df = df.sort_values(by=sort_target, ascending=(order == "Ascending"))
 
-    # Main Display
-    st.subheader("Final Analyzed Data")
-    st.dataframe(df, use_container_width=True)
+            # --- 3. DISPLAY ---
+            st.subheader("Corrected Database View")
+            st.dataframe(df, use_container_width=True)
 
-    # Automatic Mark Calculation
-    mark_col = st.sidebar.selectbox("Which column contains the Marks?", df.columns)
-    if mark_col:
-        try:
-            numeric_marks = pd.to_numeric(df[mark_col].astype(str).str.replace('%',''), errors='coerce')
-            st.metric("Class Average", f"{numeric_marks.mean():.2f}%")
-        except:
-            st.sidebar.warning("Selected 'Mark' column is not numeric.")
+            # --- 4. ANALYSIS ---
+            st.divider()
+            st.subheader("📊 Statistics")
+            
+            # Find the mark column
+            mark_col = next((c for c in df.columns if 'mark' in c.lower() or 'score' in c.lower() or 'grade' in c.lower()), None)
+            
+            if mark_col:
+                # Convert to numeric, stripping strings like '%'
+                df[mark_col] = pd.to_numeric(df[mark_col].astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce')
+                valid_marks = df[mark_col].dropna()
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Average Mark", f"{valid_marks.mean():.2f}%")
+                c2.metric("Highest", f"{valid_marks.max()}%")
+                c3.metric("Total Students", len(df))
+            else:
+                st.info("To see mark analysis, ensure your CSV has a column header named 'Mark' or 'Score'.")
 
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}. Try changing the Separator or Encoding settings above.")
 else:
-    st.info("Please upload a file or paste data in the tabs above to begin.")
+    st.info("Upload a CSV to begin. Use the 'Settings' box above if the data appears in one single column.")
