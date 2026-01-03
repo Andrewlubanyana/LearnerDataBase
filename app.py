@@ -114,8 +114,17 @@ if uploaded_file is not None:
                 fig2 = px.histogram(df, x=mark_col, title="Grade Spread", color_discrete_sequence=['#636EFA'])
                 st.plotly_chart(fig2)
 
-    except Exception as e:
-        st.error(f"Error: {e}. Please ensure your file has correct headers.")
+   # ... inside your file upload logic ...
+    try:
+        if file_extension == 'csv':
+            df = pd.read_csv(uploaded_file)
+        elif file_extension == 'xlsx':
+            df = pd.read_excel(uploaded_file)
+        # ... your other file types ...
 
-else:
-    st.info("Waiting for a file to be uploaded...")
+        if df is not None:
+            st.success("File Loaded!")
+            st.dataframe(df)
+
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
