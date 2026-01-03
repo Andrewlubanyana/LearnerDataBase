@@ -1,67 +1,58 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import pdfplumber
 from docx import Document
 import io
 
-st.set_page_config(page_title="Multi-Format Data Analyzer", layout="wide")
+# 1. Update the uploader to explicitly allow these extensions
+uploaded_file = st.file_uploader(
+    "Upload Student Data", 
+    type=['csv', 'xlsx', 'pdf', 'docx']
+)
 
-# --- HELPER FUNCTIONS ---
-
-def read_pdf(file):
-    """Extracts tables from PDF and returns a DataFrame"""
-    with pdfplumber.open(file) as pdf:
-        all_data = []
-        for page in pdf.pages:
-            table = page.extract_table()
-            if table:
-                all_data.extend(table)
-    if not all_data:
-        return None
-    # Use the first row as header
-    return pd.DataFrame(all_data[1:], columns=all_data[0])
-
-def read_docx(file):
-    """Extracts tables from Word Document and returns a DataFrame"""
-    doc = Document(file)
-    all_data = []
-    for table in doc.tables:
-        for row in table.rows:
-            all_data.append([cell.text.strip() for cell in row.cells])
-    if not all_data:
-        return None
-    return pd.DataFrame(all_data[1:], columns=all_data[0])
-
-# --- APP UI ---
-st.title("📂 Universal Student Database")
-st.write("Now supporting: **CSV, Excel, PDF, and Word**")
-
-# Update the file uploader to accept new types
-uploaded_file = st.file_uploader("Upload document", type=['csv', 'xlsx', 'pdf', 'docx'])
-
-if uploaded_file:
+if uploaded_file is not None:
+    file_extension = uploaded_file.name.split('.')[-1].lower()
     df = None
-    file_type = uploaded_file.name.split('.')[-1]
 
-    # Process based on file type
-    if file_type == 'csv':
-        df = pd.read_csv(uploaded_file)
-    elif file_type == 'xlsx':
-        df = pd.read_excel(uploaded_file)
-    elif file_type == 'pdf':
-        df = read_pdf(uploaded_file)
-    elif file_type == 'docx':
-        df = read_docx(uploaded_file)
-
-    if df is not None:
-        # Standardize: Ensure numeric columns are actually numbers
-        for col in df.columns:
-            if 'mark' in col.lower() or 'score' in col.lower():
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        st.success(f"Loaded {uploaded_file.name} successfully!")
+    try:
+        if file_extension == 'csv':
+            df = pd.read_csv(uploaded_file)
         
+        elif file_extension == 'xlsx':
+            df = pd.read_excel(uploaded_file)
+        
+        elif file_extension == 'pdf':
+            with pdfplumber.open(uploaded_file) as pdf:
+                # Extracting table from the first page
+                table = pdf.pages[0].extract_table()
+                if table:
+                    df = pd.DataFrame(table[1:], columns=table[0])
+                else:
+                    st.error("No clear table found in this PDF.")
+
+        elif file_extension == 'docx':
+            doc = Document(uploaded_file)
+            data = []
+            # Looks for the first table in the Word Doc
+            if doc.tables:
+                table = doc.tables[0]
+                for row in table.rows:
+                    data.append([cell.text.strip() for cell in row.cells])
+                df = pd.DataFrame(data[1:], columns=data[0])
+            else:
+                st.error("No table found in this Word document.")
+
+        # If data was successfully loaded into 'df'
+        if df is not None:
+            st.success(f"Successfully loaded: {uploaded_file.name}")
+            # Clean column names (remove hidden spaces)
+            df.columns = [str(c).strip() for c in df.columns]
+            st.dataframe(df)
+            
+            # --- Analysis Logic Here ---
+            
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
         # --- (Continue with the Sorting and Charting code from before) ---
         # Note: The rest of the sorting/charting code remains the same!
         st.dataframe(df)
