@@ -2,102 +2,97 @@ import streamlit as st
 import pandas as pd
 import pdfplumber
 from docx import Document
-import re
+import io
 
-st.set_page_config(page_title="Smart Student Database", layout="wide")
+st.set_page_config(page_title="Universal Data Fixer", layout="wide")
 
-# --- 1. IMPROVED HEURISTIC SCANNER ---
-def extract_from_plain_text(text):
-    lines = text.split('\n')
-    extracted_data = []
-
-    for line in lines:
-        line = line.strip()
-        if not line: continue
-
-        # 1. Look for Marks (1 to 3 digit numbers, often followed by %)
-        mark_match = re.search(r'\b(\d{1,3})\b(?:\s*%)?', line)
-        mark = mark_match.group(1) if mark_match else None
-
-        # 2. Look for Gender
-        gender_match = re.search(r'\b(Male|Female|M|F)\b', line, re.IGNORECASE)
-        gender = gender_match.group(1).capitalize() if gender_match else "N/A"
-
-        # 3. Look for Names (Captalized words that aren't 'Male' or 'Female')
-        # We look for 1 or 2 capitalized words at the start of segments
-        names = re.findall(r'\b([A-Z][a-z]+)\b', line)
-        # Filter out "Male" or "Female" from being picked up as names
-        names = [n for n in names if n.lower() not in ['male', 'female']]
-        
-        full_name = " ".join(names[:2]) if names else "Unknown"
-
-        # Only add if we found at least a Name and a Mark
-        if names or mark:
-            extracted_data.append({
-                "Full Name": full_name,
-                "Mark": mark if mark else "0",
-                "Gender": gender
-            })
-
-    if extracted_data:
-        return pd.DataFrame(extracted_data)
-    return None
-
-# --- 2. DATA PROCESSING ENGINE ---
-def process_upload(file):
+# --- 1. THE DATA ENGINE ---
+def get_data(file):
     ext = file.name.split('.')[-1].lower()
-    raw_text = ""
-
-    # A. Tables first (High Accuracy)
+    
+    # EXCEL / CSV: High Accuracy
     if ext == 'csv': return pd.read_csv(file)
     if ext == 'xlsx': return pd.read_excel(file)
     
+    # PDF: Extracting Tables or Text
     if ext == 'pdf':
         with pdfplumber.open(file) as pdf:
-            # Check for tables on any page
+            all_rows = []
             for page in pdf.pages:
                 table = page.extract_table()
-                if table: return pd.DataFrame(table[1:], columns=table[0])
-            # If no tables, get all text
-            raw_text = "\n".join([p.extract_text() for p in pdf.pages if p.extract_text()])
-            
-    elif ext == 'docx':
+                if table:
+                    all_rows.extend(table)
+            if all_rows:
+                return pd.DataFrame(all_rows[1:], columns=all_rows[0])
+            # Fallback to lines if no table
+            text = "\n".join([p.extract_text() for p in pdf.pages if p.extract_text()])
+            lines = [line.split() for line in text.split('\n') if line.strip()]
+            return pd.DataFrame(lines)
+
+    # WORD: Extracting Tables or Text
+    if ext == 'docx':
         doc = Document(file)
         if doc.tables:
             table = doc.tables[0]
             data = [[c.text.strip() for c in r.cells] for r in table.rows]
             return pd.DataFrame(data[1:], columns=data[0])
-        raw_text = "\n".join([p.text for p in doc.paragraphs])
-
-    # B. Plain Text Heuristics (Fall-back)
-    if raw_text:
-        return extract_from_plain_text(raw_text)
+        lines = [p.text.split() for p in doc.paragraphs if p.text.strip()]
+        return pd.DataFrame(lines)
+    
     return None
 
-# --- 3. APP UI ---
-st.title("📊 High-Accuracy Student Analyzer")
-uploaded_file = st.file_uploader("Upload Document (Table or Plain Text)", type=['csv', 'xlsx', 'pdf', 'docx'])
+# --- 2. THE INTERACTIVE INTERFACE ---
+st.title("📂 Flexible Data Analyzer")
+st.info("Upload any document. If the columns look wrong, use the sidebar to re-map them.")
+
+uploaded_file = st.file_uploader("Upload Document", type=['csv', 'xlsx', 'pdf', 'docx'])
 
 if uploaded_file:
-    df = process_upload(uploaded_file)
+    df = get_data(uploaded_file)
     
     if df is not None:
-        # Final Clean-up
-        df = df.dropna(subset=['Full Name']) if 'Full Name' in df.columns else df
-        df.columns = [str(c).strip() for c in df.columns]
+        # Clean up: remove empty columns/rows
+        df = df.dropna(axis=1, how='all').dropna(axis=0, how='all')
+        # Reset headers to be simple strings
+        df.columns = [f"Column {i} ({str(c)})" for i, c in enumerate(df.columns)]
 
-        # Sorting Sidebar
-        st.sidebar.header("Sort Settings")
-        sort_by = st.sidebar.selectbox("Sort by:", df.columns)
-        df = df.sort_values(by=sort_by)
-
-        st.subheader("Final Result")
-        st.dataframe(df, use_container_width=True)
+        # --- SIDEBAR: FLEXIBLE MAPPING ---
+        st.sidebar.header("🛠️ Fix Your Data")
+        st.sidebar.write("If the data is scrambled, pick the correct columns below:")
         
-        # Math Analysis
-        mark_col = next((c for c in df.columns if 'mark' in c.lower() or 'score' in c.lower()), None)
-        if mark_col:
-            df[mark_col] = pd.to_numeric(df[mark_col], errors='coerce')
-            st.info(f"Class Average: {df[mark_col].mean():.2f}%")
+        name_col = st.sidebar.selectbox("Which column is 'Name'?", df.columns, index=0)
+        mark_col = st.sidebar.selectbox("Which column is 'Mark'?", df.columns, index=min(1, len(df.columns)-1))
+        
+        sort_by = st.sidebar.selectbox("Sort Table By:", df.columns)
+        order = st.sidebar.radio("Order:", ["Ascending", "Descending"])
+
+        # Apply Sorting
+        df = df.sort_values(by=sort_by, ascending=(order == "Ascending"))
+
+        # --- DISPLAY ---
+        st.subheader("Your Extracted Database")
+        st.dataframe(df, use_container_width=True)
+
+        # --- ANALYSIS ---
+        st.divider()
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.write("### 🔍 Column Focus")
+            # Show a clean version of just the chosen columns
+            clean_df = df[[name_col, mark_col]].copy()
+            clean_df.columns = ["Student Name", "Mark"]
+            st.table(clean_df.head(10))
+
+        with col2:
+            st.write("### 📈 Quick Stats")
+            try:
+                # Force the chosen Mark column to be a number for calculation
+                numeric_marks = pd.to_numeric(df[mark_col].astype(str).str.replace('%',''), errors='coerce')
+                avg = numeric_marks.mean()
+                st.metric("Calculated Average", f"{avg:.2f}%")
+            except:
+                st.warning("Could not calculate average. Please ensure the 'Mark' column only contains numbers.")
+
     else:
-        st.error("Could not extract data. Please ensure names and marks are clearly typed.")
+        st.error("No readable data found in this file.")
